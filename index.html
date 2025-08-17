@@ -450,6 +450,7 @@
         let db, auth;
         let userId, currentRoomId;
         let roomUnsubscribe = null; // To detach the Firestore listener
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Define appId for Firestore paths
         
         let localGameState = {}; // Holds temporary local data
         let selectedCharacter = null;
@@ -696,7 +697,7 @@
                 };
                 
                 // Firestore collection path
-                const roomsCollection = collection(db, `rooms`);
+                const roomsCollection = collection(db, `/artifacts/${appId}/public/data/rooms`);
                 const docRef = await addDoc(roomsCollection, roomData);
                 currentRoomId = docRef.id;
                 
@@ -715,7 +716,7 @@
             if (!userId) return alert("Autenticazione fallita. Riprova.");
 
             try {
-                const roomRef = doc(db, "rooms", code);
+                const roomRef = doc(db, `/artifacts/${appId}/public/data/rooms`, code);
                 const roomSnap = await getDoc(roomRef);
 
                 if (roomSnap.exists()) {
@@ -752,7 +753,7 @@
             };
 
             try {
-                const roomRef = doc(db, "rooms", currentRoomId);
+                const roomRef = doc(db, `/artifacts/${appId}/public/data/rooms`, currentRoomId);
                 await updateDoc(roomRef, {
                     [`players.${userId}`]: playerData
                 });
@@ -764,7 +765,7 @@
 
         const joinLobby = () => {
             if (!currentRoomId) return;
-            const roomRef = doc(db, "rooms", currentRoomId);
+            const roomRef = doc(db, `/artifacts/${appId}/public/data/rooms`, currentRoomId);
 
             if (roomUnsubscribe) roomUnsubscribe(); // Detach any old listener
 
@@ -860,7 +861,7 @@
         const updateRoom = async (data) => {
             if (!currentRoomId) return;
             try {
-                const roomRef = doc(db, "rooms", currentRoomId);
+                const roomRef = doc(db, `/artifacts/${appId}/public/data/rooms`, currentRoomId);
                 await updateDoc(roomRef, data);
             } catch (error) {
                 console.error("Error updating room:", error);
