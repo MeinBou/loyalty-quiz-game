@@ -606,8 +606,6 @@
                     }
                 });
 
-                // This logic is for a specific environment and might not apply here.
-                // We will default to anonymous sign-in.
                 await signInAnonymously(auth);
 
             } catch (error) {
@@ -641,7 +639,6 @@
             startGameSetupBtn.addEventListener('click', handleCreateRoom);
             continueToRosterBtn.addEventListener('click', () => showScreen('character-roster'));
             copyCodeBtn.addEventListener('click', () => {
-                // Using a fallback for clipboard API due to potential iframe restrictions
                 const textArea = document.createElement("textarea");
                 textArea.value = currentRoomId;
                 document.body.appendChild(textArea);
@@ -658,7 +655,13 @@
             });
             
             confirmCharacterBtn.addEventListener('click', handleConfirmCharacter);
-            startGameBtn.addEventListener('click', () => updateRoom({ status: 'starting' }));
+            startGameBtn.addEventListener('click', () => {
+                updateRoom({ 
+                    status: 'playing',
+                    currentTurnIndex: -1,
+                    roundsPlayed: 0
+                });
+            });
             playAgainBtn.addEventListener('click', () => window.location.reload());
             submitStatementsBtn.addEventListener('click', handleSubmitStatements);
             submitPhrasesBtn.addEventListener('click', handleSubmitPhrases);
@@ -686,16 +689,36 @@
             };
 
             try {
+                let players = {};
+                let usedCharacters = [];
+                
+                for (let i = 0; i < cpuCount; i++) {
+                    const cpuId = `cpu_${i}_${Date.now()}`;
+                    let randomChar;
+                    do {
+                        randomChar = characters[Math.floor(Math.random() * characters.length)];
+                    } while (usedCharacters.includes(randomChar.name));
+                    usedCharacters.push(randomChar.name);
+                    
+                    players[cpuId] = {
+                        uid: cpuId,
+                        nickname: randomChar.name,
+                        character: randomChar,
+                        score: 0,
+                        isCpu: true,
+                        timesGuessed: 0
+                    };
+                }
+
                 const roomData = {
                     hostId: userId,
                     config: roomConfig,
                     gameMode: localGameState.gameMode,
-                    players: {},
-                    status: 'lobby', // lobby, starting, playing, finished
-                    createdAt: new Date().toISOString() // Use ISO string for Firestore
+                    players: players,
+                    status: 'lobby',
+                    createdAt: new Date().toISOString()
                 };
                 
-                // **FIXED PATH**
                 const roomsCollection = collection(db, 'rooms');
                 const docRef = await addDoc(roomsCollection, roomData);
                 currentRoomId = docRef.id;
@@ -715,7 +738,6 @@
             if (!userId) return alert("Autenticazione fallita. Riprova.");
 
             try {
-                 // **FIXED PATH**
                 const roomRef = doc(db, 'rooms', code);
                 const roomSnap = await getDoc(roomRef);
 
@@ -753,7 +775,6 @@
             };
 
             try {
-                 // **FIXED PATH**
                 const roomRef = doc(db, 'rooms', currentRoomId);
                 await updateDoc(roomRef, {
                     [`players.${userId}`]: playerData
@@ -766,17 +787,15 @@
 
         const joinLobby = () => {
             if (!currentRoomId) return;
-             // **FIXED PATH**
             const roomRef = doc(db, 'rooms', currentRoomId);
 
-            if (roomUnsubscribe) roomUnsubscribe(); // Detach any old listener
+            if (roomUnsubscribe) roomUnsubscribe();
 
             roomUnsubscribe = onSnapshot(roomRef, (doc) => {
                 if (doc.exists()) {
                     const roomData = doc.data();
                     updateUI(roomData);
                 } else {
-                    // Room was deleted or doesn't exist
                     if (roomUnsubscribe) roomUnsubscribe();
                     alert("La stanza non esiste più.");
                     window.location.reload();
@@ -788,19 +807,22 @@
             });
         };
         
-        // This is the main function that reacts to DB changes and updates the game view
         const updateUI = (roomData) => {
-            console.log("Updating UI with new room data:", roomData);
+            console.log("Current Status:", roomData.status);
             
-            // Always update lobby info if visible
-            if (document.getElementById('lobby').classList.contains('active')) {
+            if (roomData.status === 'lobby') {
+                showScreen('lobby');
                 lobbyRoomCode.textContent = currentRoomId;
-                playerCount.textContent = Object.keys(roomData.players).length;
+                const totalPlayersInLobby = Object.keys(roomData.players).length;
+                playerCount.textContent = totalPlayersInLobby;
                 maxPlayers.textContent = roomData.config.totalPlayers;
                 playerList.innerHTML = '';
                 for (const uid in roomData.players) {
                     const player = roomData.players[uid];
-                    playerList.innerHTML += `<div class="glass-panel p-3 text-center"><img src="${player.character.img}" class="w-16 h-16 rounded-full mx-auto mb-2 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/64x64/4B5563/E5E7EB?text=?';"><p class="font-semibold truncate">${player.nickname}</p>${uid === roomData.hostId ? '<span class="text-xs text-indigo-400">Host</span>' : ''}</div>`;
+                    const playerLabel = uid === roomData.hostId 
+                        ? '<span class="text-xs text-indigo-400">Host</span>' 
+                        : player.isCpu ? '<span class="text-xs text-gray-400">(CPU)</span>' : '';
+                    playerList.innerHTML += `<div class="glass-panel p-3 text-center"><img src="${player.character.img}" class="w-16 h-16 rounded-full mx-auto mb-2 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/64x64/4B5563/E5E7EB?text=?';"><p class="font-semibold truncate">${player.nickname}</p>${playerLabel}</div>`;
                 }
                 
                 if (userId === roomData.hostId) {
@@ -812,58 +834,25 @@
                        startGameBtn.classList.add('hidden');
                     }
                 }
-            }
-
-            // Handle game state changes
-            switch(roomData.status) {
-                case 'lobby':
-                    showScreen('lobby');
-                    break;
-                case 'starting':
-                    if (userId === roomData.hostId && !roomData.cpusAdded) {
-                        addCpusAndStartGame(roomData);
-                    }
-                    break;
-                // Add cases for 'playing', 'finished', etc. as you build out the logic
+            } else if (roomData.status === 'playing') {
+                initializeGame(roomData);
             }
         };
 
-        const addCpusAndStartGame = async (roomData) => {
-             let updatedPlayers = {...roomData.players};
-             let usedCharacters = Object.values(roomData.players).map(p => p.character.name);
-             
-             for (let i = 0; i < roomData.config.cpuPlayers; i++) {
-                 const cpuId = `cpu_${i}_${Date.now()}`;
-                 let randomChar;
-                 do {
-                     randomChar = characters[Math.floor(Math.random() * characters.length)];
-                 } while (usedCharacters.includes(randomChar.name));
-                 usedCharacters.push(randomChar.name);
-                 
-                 updatedPlayers[cpuId] = {
-                     uid: cpuId,
-                     nickname: randomChar.name,
-                     character: randomChar,
-                     score: 0,
-                     isCpu: true,
-                     timesGuessed: 0
-                 };
-             }
-             
-             await updateRoom({
-                 players: updatedPlayers,
-                 status: 'playing',
-                 cpusAdded: true,
-                 currentTurnIndex: -1,
-                 roundsPlayed: 0
-             });
+        const initializeGame = (roomData) => {
+            quizMusic.play();
+            // This is the main router that starts the correct game mode for all players.
+            // It's called once when the status changes to 'playing'.
+            // The game logic from here should be driven by further state changes in Firestore.
+            console.log("Initializing game mode:", roomData.gameMode);
+            
+            // For now, we only implement the very first step: starting the first round.
+            startNewRound(roomData);
         };
-
 
         const updateRoom = async (data) => {
             if (!currentRoomId) return;
             try {
-                 // **FIXED PATH**
                 const roomRef = doc(db, 'rooms', currentRoomId);
                 await updateDoc(roomRef, data);
             } catch (error) {
@@ -871,11 +860,25 @@
             }
         };
 
+        // --- REFACTORED GAME LOGIC (WIP) ---
+        const startNewRound = (roomData) => {
+            // This function is now just a trigger for the host
+            if (userId !== roomData.hostId) return;
 
-        // --- OLD LOGIC TO BE REFACTORED/REMOVED ---
-        // The functions below need to be adapted to use the `updateRoom` function
-        // instead of modifying a local state object. For now, they are placeholders.
+            if (roomData.roundsPlayed >= Object.keys(roomData.players).length) {
+                updateRoom({ status: 'finished' });
+                return;
+            }
+            const newTurnIndex = (roomData.currentTurnIndex + 1) % Object.keys(roomData.players).length;
+            
+            // The host updates the state, and all clients will react to the change via onSnapshot
+            updateRoom({ 
+                currentTurnIndex: newTurnIndex,
+                // More state resets will be needed here as we build out the game loop
+            });
+        };
 
+        // --- OLD LOGIC (PLACEHOLDERS) ---
         const setupAudio = () => {
             const randomTrack = MUSIC_TRACKS[Math.floor(Math.random() * MUSIC_TRACKS.length)];
             quizMusic = new Howl({ src: [randomTrack], loop: true, volume: 0.5 });
@@ -904,9 +907,6 @@
             });
         };
         
-        // --- TODO: Refactor the functions below to work with Firestore ---
-        const startGame = () => { /* To be refactored */ };
-        const startNewRound = () => { /* To be refactored */ };
         const showQuestionCreationScreen = () => { /* To be refactored */ };
         const renderQuestionForm = () => { /* To be refactored */ };
         const saveQuestion = () => { /* To be refactored */ };
